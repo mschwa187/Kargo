@@ -24,4 +24,4 @@ jobs:
         pip install -r requirements.txt  # If you have dependencies, make sure to list them in requirements.txt
 
     - name: Run the Python script
-      run: python path/to/your_script.py  # Run your Python script
+      run: pokedata_scraper  # Run your Python script
