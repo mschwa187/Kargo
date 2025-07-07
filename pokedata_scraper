@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""
+Pokedata.ovh Events Scraper
+Scrapes Pokemon events from pokedata.ovh with filtering options
+"""
+
+import time
+import json
+import csv
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import Select
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
+
+class PokedataEventsScraper:
+    def __init__(self, headless=True):
+        """Initialize the scraper with Chrome WebDriver"""
+        self.setup_driver(headless)
+        self.events = []
+        self.base_url = "https://www.pokedata.ovh/events/"
+        
+    def setup_driver(self, headless=True):
+        """Set up Chrome WebDriver with options"""
+        chrome_options = Options()
+        if headless:
+            chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        
+        # Automatically download and setup ChromeDriver
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        self.wait = WebDriverWait(self.driver, 20)
+        
+    def scrape_events(self, country="US", state="GA", event_types=None, show_past=False):
+        """
+        Scrape events with filtering options
+        
+        Args:
+            country: Country code (e.g., "US", "CA", "GB")
+            state: State/Province (e.g., "GA", "CA", "TX")
+            event_types: List of event types to include (e.g., ["TCG Cups", "TCG Challenges"])
+            show_past: Whether to include past events
+        """
+        try:
+            print(f"Loading Pokedata events page...")
+            self.driver.get(self.base_url)
+            
+            # Wait for page to load
+            self.wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(3)
+            
+            # Set filters
+            if country:
+                self._set_country_filter(country)
+            if state:
+                self._set_state_filter(state)
+            if event_types:
+                self._set_event_type_filters(event_types)
+            if show_past:
+                self._toggle_past_events(True)
+                
+            # Wait for filtered results to load
+            time.sleep(3)
+            
+            # Extract events
+            self._extract_events_from_table()
+            
+            return self.events
+            
+        except Exception as e:
+            print(f"Error scraping events: {e}")
+            return []
+            
+    def _set_country_filter(self, country):
+        """Set country filter"""
+        try:
+            # Look for country dropdown or select element
+            country_selectors = [
+                'select[name="country"]',
+                'select#country',
+                'select:has(option[value="US"])',
+                'select:has(option[value="' + country + '"])'
+            ]
+            
+            for selector in country_selectors:
+                try:
+                    country_select = Select(self.driver.find_element(By.CSS_SELECTOR, selector))
+                    country_select.select_by_value(country)
+                    print(f"Country filter set to: {country}")
+                    time.sleep(1)
+                    return
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Could not set country filter: {e}")
+            
+    def _set_state_filter(self, state):
+        """Set state filter"""
+        try:
+            # Look for state dropdown or input
+            state_selectors = [
+                'select[name="state"]',
+                'select#state',
+                'input[name="state"]',
+                'input#state'
+            ]
+            
+            for selector in state_selectors:
+                try:
+                    state_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    
+                    if state_element.tag_name == 'select':
+                        state_select = Select(state_element)
+                        # Try to select by value or visible text
+                        try:
+                            state_select.select_by_value(state)
+                        except:
+                            state_select.select_by_visible_text(state)
+                    else:
+                        # Input field
+                        state_element.clear()
+                        state_element.send_keys(state)
+                        
+                    print(f"State filter set to: {state}")
+                    time.sleep(1)
+                    return
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Could not set state filter: {e}")
+            
+    def _set_event_type_filters(self, event_types):
+        """Set event type filters"""
+        try:
+            # Look for checkboxes or buttons for event types
+            for event_type in event_types:
+                type_selectors = [
+                    f'input[type="checkbox"][value*="{event_type.lower()}"]',
+                    f'input[type="checkbox"][id*="{event_type.lower()}"]',
+                    f'label:contains("{event_type}") input[type="checkbox"]'
+                ]
+                
+                for selector in type_selectors:
+                    try:
+                        checkbox = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if not checkbox.is_selected():
+                            checkbox.click()
+                            print(f"Selected event type: {event_type}")
+                            time.sleep(0.5)
+                        break
+                    except:
+                        continue
+                        
+        except Exception as e:
+            print(f"Could not set event type filters: {e}")
+            
+    def _toggle_past_events(self, show_past):
+        """Toggle past events display"""
+        try:
+            past_events_selectors = [
+                'input[type="checkbox"]:has-text("past")',
+                'input[type="checkbox"][id*="past"]',
+                'input[type="checkbox"][name*="past"]'
+            ]
+            
+            for selector in past_events_selectors:
+                try:
+                    past_checkbox = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if show_past and not past_checkbox.is_selected():
+                        past_checkbox.click()
+                        print("Enabled past events")
+                    elif not show_past and past_checkbox.is_selected():
+                        past_checkbox.click()
+                        print("Disabled past events")
+                    break
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Could not toggle past events: {e}")
+            
+    def _extract_events_from_table(self):
+        """Extract events from the data table"""
+        try:
+            # Wait for table to load
+            table_selectors = [
+                'table',
+                '.table',
+                '.events-table',
+                '[data-table]'
+            ]
+            
+            table_element = None
+            for selector in table_selectors:
+                try:
+                    table_element = self.wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    break
+                except TimeoutException:
+                    continue
+                    
+            if not table_element:
+                print("No table found, trying alternative extraction methods...")
+                self._extract_events_alternative()
+                return
+                
+            # Extract table headers
+            headers = []
+            try:
+                header_row = table_element.find_element(By.CSS_SELECTOR, 'thead tr, tr:first-child')
+                header_cells = header_row.find_elements(By.CSS_SELECTOR, 'th, td')
+                headers = [cell.text.strip() for cell in header_cells]
+                print(f"Table headers: {headers}")
+            except:
+                print("Could not extract table headers")
+                
+            # Extract table rows
+            rows = table_element.find_elements(By.CSS_SELECTOR, 'tbody tr, tr')
+            if not rows:
+                rows = table_element.find_elements(By.CSS_SELECTOR, 'tr')[1:]  # Skip header row
+                
+            print(f"Found {len(rows)} rows in table")
+            
+            for row in rows:
+                try:
+                    cells = row.find_elements(By.CSS_SELECTOR, 'td, th')
+                    if len(cells) < 2:  # Skip empty or header rows
+                        continue
+                        
+                    event_data = {
+                        'scraped_at': datetime.now().isoformat(),
+                        'raw_text': row.text.strip()
+                    }
+                    
+                    # Map cells to headers if available
+                    if headers and len(cells) >= len(headers):
+                        for i, header in enumerate(headers):
+                            if i < len(cells):
+                                event_data[header.lower().replace(' ', '_')] = cells[i].text.strip()
+                    else:
+                        # Generic extraction
+                        for i, cell in enumerate(cells):
+                            event_data[f'column_{i}'] = cell.text.strip()
+                            
+                    # Try to extract links
+                    links = row.find_elements(By.CSS_SELECTOR, 'a')
+                    if links:
+                        event_data['links'] = [link.get_attribute('href') for link in links]
+                        
+                    self.events.append(event_data)
+                    
+                except Exception as e:
+                    print(f"Error extracting row data: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error extracting events from table: {e}")
+            
+    def _extract_events_alternative(self):
+        """Alternative extraction method if table structure is different"""
+        try:
+            # Try to extract any visible event information
+            event_selectors = [
+                '.event',
+                '.event-item',
+                '.event-row',
+                '[data-event]'
+            ]
+            
+            for selector in event_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        print(f"Found {len(elements)} events using selector: {selector}")
+                        
+                        for element in elements:
+                            event_data = {
+                                'scraped_at': datetime.now().isoformat(),
+                                'raw_text': element.text.strip()
+                            }
+                            
+                            # Extract any links
+                            links = element.find_elements(By.CSS_SELECTOR, 'a')
+                            if links:
+                                event_data['links'] = [link.get_attribute('href') for link in links]
+                                
+                            self.events.append(event_data)
+                        return
+                except:
+                    continue
+                    
+            # Last resort: capture page content
+            print("No events found with standard methods, capturing page content...")
+            self._capture_page_content()
+            
+        except Exception as e:
+            print(f"Error in alternative extraction: {e}")
+            
+    def _capture_page_content(self):
+        """Capture page content for debugging"""
+        try:
+            # Save full page source
+            with open('pokedata_page.html', 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            print("Page source saved to pokedata_page.html")
+            
+            # Try to get CSV export if available
+            self._try_csv_export()
+            
+        except Exception as e:
+            print(f"Error capturing page content: {e}")
+            
+    def _try_csv_export(self):
+        """Try to use CSV export feature if available"""
+        try:
+            csv_selectors = [
+                'a:contains("CSV")',
+                'button:contains("CSV")',
+                'input[value*="csv"]',
+                '[data-export="csv"]'
+            ]
+            
+            for selector in csv_selectors:
+                try:
+                    csv_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    csv_button.click()
+                    print("CSV export clicked")
+                    time.sleep(2)
+                    break
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Could not export CSV: {e}")
+            
+    def save_events_to_csv(self, filename='pokedata_events.csv'):
+        """Save scraped events to CSV file"""
+        if not self.events:
+            print("No events to save")
+            return
+            
+        try:
+            df = pd.DataFrame(self.events)
+            df.to_csv(filename, index=False)
+            print(f"Saved {len(self.events)} events to {filename}")
+        except Exception as e:
+            print(f"Error saving to CSV: {e}")
+            
+    def save_events_to_json(self, filename='pokedata_events.json'):
+        """Save scraped events to JSON file"""
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(self.events, f, indent=2, ensure_ascii=False)
+            print(f"Saved {len(self.events)} events to {filename}")
+        except Exception as e:
+            print(f"Error saving to JSON: {e}")
+            
+    def print_events(self):
+        """Print all scraped events"""
+        if not self.events:
+            print("No events found")
+            return
+            
+        for i, event in enumerate(self.events, 1):
+            print(f"\n--- Event {i} ---")
+            for key, value in event.items():
+                if value and key != 'raw_text':
+                    print(f"{key.replace('_', ' ').title()}: {value}")
+                    
+    def close(self):
+        """Close the browser driver"""
+        self.driver.quit()
+
+def main():
+    """Main function to run the scraper"""
+    # Configure scraping parameters
+    scraper = PokedataEventsScraper(headless=False)  # Set to True for headless mode
+    
+    try:
+        print("Starting Pokedata.ovh events scraper...")
+        
+        # Scrape events with filters - TCG Cups and TCG Challenges only for Georgia, US
+        events = scraper.scrape_events(
+            country="US",
+            state="GA", 
+            event_types=["TCG Cups", "TCG Challenges"],
+            show_past=False
+        )
+        
+        if events:
+            print(f"\nFound {len(events)} events")
+            scraper.print_events()
+            scraper.save_events_to_csv()
+            scraper.save_events_to_json()
+        else:
+            print("No events found. Check the saved HTML file for debugging.")
+            
+    except Exception as e:
+        print(f"Error running scraper: {e}")
+        
+    finally:
+        scraper.close()
+
+if __name__ == "__main__":
+    main()
